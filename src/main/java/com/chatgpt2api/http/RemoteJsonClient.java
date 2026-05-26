@@ -102,8 +102,12 @@ public class RemoteJsonClient {
         String proxy = config.getProxySettings();
         if (!proxy.isEmpty()) {
             URI uri = URI.create(proxy);
-            if ("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme())) {
-                factory.setProxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(uri.getHost(), uri.getPort())));
+            String scheme = AppConfigService.clean(uri.getScheme()).toLowerCase();
+            if (uri.getHost() != null && ("http".equals(scheme) || "https".equals(scheme)
+                    || "socks5".equals(scheme) || "socks5h".equals(scheme))) {
+                int port = uri.getPort() > 0 ? uri.getPort() : ("https".equals(scheme) ? 443 : 80);
+                Proxy.Type type = scheme.startsWith("socks") ? Proxy.Type.SOCKS : Proxy.Type.HTTP;
+                factory.setProxy(new Proxy(type, new InetSocketAddress(uri.getHost(), port)));
             }
         }
         return new RestTemplate(factory);

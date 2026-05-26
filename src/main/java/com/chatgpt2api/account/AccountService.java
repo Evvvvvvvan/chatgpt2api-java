@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -66,7 +67,7 @@ public class AccountService {
         for (Map<String, Object> item : accounts.values()) {
             String status = AppConfigService.clean(item.get("status"));
             String token = AppConfigService.clean(item.get("access_token"));
-            if (!token.isEmpty() && !"disabled".equalsIgnoreCase(status) && !"abnormal".equalsIgnoreCase(status)
+            if (!token.isEmpty() && !isUnavailableStatus(status)
                     && !excluded.contains(token)) {
                 candidates.add(token);
             }
@@ -94,7 +95,7 @@ public class AccountService {
             String token = AppConfigService.clean(item.get("access_token"));
             boolean available = AppConfigService.booleanValue(item.get("image_quota_unknown"), false)
                     || intValue(item.get("quota")) > 0;
-            if (!token.isEmpty() && available && !"disabled".equalsIgnoreCase(status) && !"abnormal".equalsIgnoreCase(status)
+            if (!token.isEmpty() && available && !isUnavailableStatus(status)
                     && !excluded.contains(token) && (!imageInflight.containsKey(token) || imageInflight.get(token) < maxConcurrency)) {
                 candidates.add(token);
             }
@@ -209,6 +210,64 @@ public class AccountService {
         return item == null ? null : new LinkedHashMap<String, Object>(item);
     }
 
+    public synchronized List<String> listLimitedTokens() {
+        List<String> result = new ArrayList<String>();
+        for (Map<String, Object> account : accounts.values()) {
+            if (isLimitedStatus(AppConfigService.clean(account.get("status")))) {
+                String token = AppConfigService.clean(account.get("access_token"));
+                if (!token.isEmpty()) {
+                    result.add(token);
+                }
+            }
+        }
+        return result;
+    }
+
+    public synchronized List<String> listExpiringAccessTokens() {
+        List<String> result = new ArrayList<String>();
+        for (Map<String, Object> account : accounts.values()) {
+            String token = AppConfigService.clean(account.get("access_token"));
+            if (!token.isEmpty() && !AppConfigService.clean(account.get("refresh_token")).isEmpty() && needsTokenRefresh(token)) {
+                result.add(token);
+            }
+        }
+        return result;
+    }
+
+    public synchronized List<String> listRefreshTokenKeepaliveTokens() {
+        List<String> result = new ArrayList<String>();
+        Instant threshold = Instant.now().minus(3, ChronoUnit.DAYS);
+        for (Map<String, Object> account : accounts.values()) {
+            String token = AppConfigService.clean(account.get("access_token"));
+            String refreshToken = AppConfigService.clean(account.get("refresh_token"));
+            Instant lastRefresh = parseTime(first(account.get("last_token_refresh_at"), account.get("created_at")));
+            if (!token.isEmpty() && !refreshToken.isEmpty() && lastRefresh != null && lastRefresh.isBefore(threshold)
+                    && !hasRecentTokenRefreshError(account, 6 * 60 * 60L)) {
+                result.add(token);
+                if (result.size() >= 3) {
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    public Map<String, Object> keepaliveRefreshTokens(List<String> accessTokens) {
+        int refreshed = 0;
+        List<Map<String, Object>> errors = new ArrayList<Map<String, Object>>();
+        for (String token : uniqueTokens(accessTokens)) {
+            String activeToken = refreshAccessToken(token, true, "refresh_token_keepalive");
+            Map<String, Object> account = getAccount(activeToken);
+            String error = account == null ? "" : AppConfigService.clean(account.get("last_token_refresh_error"));
+            if (!error.isEmpty()) {
+                errors.add(map("token", anonymizeToken(token), "error", error));
+            } else if (account != null) {
+                refreshed++;
+            }
+        }
+        return map("refreshed", refreshed, "errors", errors, "items", listAccounts());
+    }
+
     public Map<String, Object> refreshAccounts(List<String> accessTokens) {
         List<String> targets = uniqueTokens(accessTokens);
         Map<String, Object> result = new LinkedHashMap<String, Object>();
@@ -309,6 +368,9 @@ public class AccountService {
         }
         String refreshToken = AppConfigService.clean(account.get("refresh_token"));
         if (refreshToken.isEmpty()) {
+            return token;
+        }
+        if (!force && hasRecentTokenRefreshError(account, 5 * 60L)) {
             return token;
         }
         Map<String, String> form = new LinkedHashMap<String, String>();
@@ -596,6 +658,43 @@ public class AccountService {
 
     private String oauthUserAgent() {
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+    }
+
+    private boolean isUnavailableStatus(String status) {
+        return "disabled".equalsIgnoreCase(status) || "abnormal".equalsIgnoreCase(status)
+                || "禁用".equals(status) || "异常".equals(status);
+    }
+
+    private boolean isLimitedStatus(String status) {
+        return "limited".equalsIgnoreCase(status) || "限流".equals(status);
+    }
+
+    private boolean hasRecentTokenRefreshError(Map<String, Object> account, long seconds) {
+        if (AppConfigService.clean(account.get("last_token_refresh_error")).isEmpty()) {
+            return false;
+        }
+        Instant value = parseTime(AppConfigService.clean(account.get("last_token_refresh_error_at")));
+        return value != null && value.isAfter(Instant.now().minus(seconds, ChronoUnit.SECONDS));
+    }
+
+    private Instant parseTime(String value) {
+        if (value.isEmpty()) {
+            return null;
+        }
+        try {
+            return Instant.parse(value);
+        } catch (Exception ignored) {
+        }
+        try {
+            return LocalDateTime.parse(value, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                    .atZone(ZoneId.systemDefault()).toInstant();
+        } catch (Exception ignored) {
+        }
+        try {
+            return LocalDateTime.parse(value).atZone(ZoneId.systemDefault()).toInstant();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void requireRemoteClient() {

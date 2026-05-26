@@ -36,12 +36,21 @@ public class UpstreamHttpClient {
     }
 
     public Session session() {
-        return new Session();
+        return new Session(config.getProxySettings());
+    }
+
+    public Session sessionWithProxy(String proxy) {
+        return new Session(AppConfigService.clean(proxy));
     }
 
     public final class Session {
         private final CookieManager cookies = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
         private final Path nativeCookieFile = temporary("chatgpt2api-cookies-", ".txt");
+        private final String proxy;
+
+        private Session(String proxy) {
+            this.proxy = proxy;
+        }
 
         public Response get(String url, Map<String, String> headers, int timeoutSeconds) {
             return execute("GET", url, headers, null, timeoutSeconds);
@@ -75,7 +84,7 @@ public class UpstreamHttpClient {
             HttpURLConnection connection = null;
             try {
                 URI uri = URI.create(url);
-                connection = (HttpURLConnection) new URL(url).openConnection(proxy());
+                connection = (HttpURLConnection) new URL(url).openConnection(createProxy(proxy));
                 connection.setRequestMethod(method);
                 connection.setConnectTimeout(timeoutSeconds * 1000);
                 connection.setReadTimeout(timeoutSeconds * 1000);
@@ -123,8 +132,8 @@ public class UpstreamHttpClient {
                         String.valueOf(timeoutSeconds), "--request", method, "--cookie", nativeCookieFile.toString(),
                         "--cookie-jar", nativeCookieFile.toString(), "--dump-header", headerFile.toString(),
                         "--output", responseFile.toString(), "--write-out", "%{http_code}\\n%{url_effective}");
-                if (!config.getProxySettings().isEmpty()) {
-                    Collections.addAll(command, "--proxy", config.getProxySettings());
+                if (!proxy.isEmpty()) {
+                    Collections.addAll(command, "--proxy", proxy);
                 }
                 for (Map.Entry<String, String> header : headers.entrySet()) {
                     if (header.getValue() != null && !header.getValue().isEmpty()) {
@@ -221,8 +230,7 @@ public class UpstreamHttpClient {
         }
     }
 
-    private Proxy proxy() {
-        String candidate = config.getProxySettings();
+    private Proxy createProxy(String candidate) {
         if (candidate.isEmpty()) {
             return Proxy.NO_PROXY;
         }
