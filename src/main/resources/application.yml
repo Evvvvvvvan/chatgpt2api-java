@@ -1,0 +1,18 @@
+server:
+  port: ${SERVER_PORT:8000}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 200MB
+  jackson:
+    default-property-inclusion: always
+
+chatgpt2api:
+  root-dir: ${CHATGPT2API_ROOT_DIR:.}

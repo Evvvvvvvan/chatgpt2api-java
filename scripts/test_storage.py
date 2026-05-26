@@ -29,7 +29,7 @@ def test_storage():
     backend_type = os.getenv("STORAGE_BACKEND", "json")
     print(f"\n当前存储后端: {backend_type}")
     
-    if backend_type in ("sqlite", "postgres", "postgresql", "mysql", "database"):
+    if backend_type in ("mysql", "database"):
         database_url = os.getenv("DATABASE_URL", "")
         if database_url:
             # 隐藏密码
@@ -42,7 +42,7 @@ def test_storage():
                         database_url = f"{protocol}://{username}:****@{host}"
             print(f"数据库连接: {database_url}")
         else:
-            print(f"数据库连接: 本地 SQLite (data/accounts.db)")
+            print("数据库连接: 未配置 DATABASE_URL")
     
     elif backend_type == "git":
         repo_url = os.getenv("GIT_REPO_URL", "")

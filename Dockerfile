@@ -1,55 +1,39 @@
-ARG BUILDPLATFORM
-ARG TARGETPLATFORM
-ARG TARGETARCH
-
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
-
-WORKDIR /app/web
-
-COPY web/package.json web/bun.lock ./
-RUN npm install
-
-COPY VERSION /app/VERSION
-COPY web ./
-RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" npm run build
-
-
-FROM --platform=$TARGETPLATFORM python:3.13-slim AS app
-
-ARG TARGETPLATFORM
-ARG TARGETARCH
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+FROM maven:3.9.9-eclipse-temurin-8 AS java-build
 
 WORKDIR /app
 
-# 安装系统依赖
-# - git: Git 存储后端需要
-# - libpq-dev: PostgreSQL 客户端库
-# - gcc: 编译 psycopg2-binary 需要
+COPY pom.xml ./
+COPY src ./src
+COPY VERSION ./
+COPY config.json ./
+RUN mvn -q -DskipTests package
+
+FROM eclipse-temurin:8-jre
+
+WORKDIR /app
+
+ARG TARGETARCH=amd64
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
-    libpq-dev \
-    gcc \
     openssl \
+    curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        mkdir -p /opt/curl-impersonate \
+        && curl -fsSL https://github.com/lwthiker/curl-impersonate/releases/download/v0.6.1/curl-impersonate-v0.6.1.x86_64-linux-gnu.tar.gz \
+        | tar -xz -C /opt/curl-impersonate \
+        && find /opt/curl-impersonate -name curl_chrome110 -type f -exec ln -s {} /usr/local/bin/curl_chrome110 \; ; \
+    fi
 
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+COPY --from=java-build /app/target/chatgpt2api-java-*.jar /app/chatgpt2api.jar
+COPY VERSION /app/VERSION
+COPY config.json /app/config.json
 
-COPY main.py ./
-COPY config.json ./
-COPY VERSION ./
-COPY api ./api
-COPY services ./services
-COPY utils ./utils
-COPY scripts ./scripts
-COPY --from=web-build /app/web/out ./web_dist
+ENV CHATGPT2API_CURL_BIN=/usr/local/bin/curl_chrome110
 
-EXPOSE 80
+EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--access-log"]
+CMD ["java", "-jar", "/app/chatgpt2api.jar"]

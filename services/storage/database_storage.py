@@ -31,7 +31,7 @@ class AuthKeyModel(Base):
 
 
 class DatabaseStorageBackend(StorageBackend):
-    """数据库存储后端（支持 SQLite、PostgreSQL、MySQL 等）"""
+    """MySQL 数据库存储后端。"""
 
     def __init__(self, database_url: str):
         self.database_url = database_url
@@ -142,13 +142,7 @@ class DatabaseStorageBackend(StorageBackend):
 
     def get_backend_info(self) -> dict[str, Any]:
         """获取存储后端信息"""
-        db_type = "unknown"
-        if "sqlite" in self.database_url:
-            db_type = "sqlite"
-        elif "postgresql" in self.database_url or "postgres" in self.database_url:
-            db_type = "postgresql"
-        elif "mysql" in self.database_url:
-            db_type = "mysql"
+        db_type = "mysql"
         
         return {
             "type": "database",

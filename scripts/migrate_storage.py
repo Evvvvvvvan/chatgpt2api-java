@@ -3,8 +3,8 @@
 存储后端数据迁移脚本
 
 用法：
-  python scripts/migrate_storage.py --from json --to postgres
-  python scripts/migrate_storage.py --from postgres --to git
+  python scripts/migrate_storage.py --from json --to mysql
+  python scripts/migrate_storage.py --from mysql --to git
   python scripts/migrate_storage.py --export accounts.json
   python scripts/migrate_storage.py --import accounts.json
 """
@@ -100,11 +100,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 从 JSON 迁移到 PostgreSQL
-  python scripts/migrate_storage.py --from json --to postgres
+  # 从 JSON 迁移到 MySQL
+  python scripts/migrate_storage.py --from json --to mysql
   
-  # 从 PostgreSQL 迁移到 Git
-  python scripts/migrate_storage.py --from postgres --to git
+  # 从 MySQL 迁移到 Git
+  python scripts/migrate_storage.py --from mysql --to git
   
   # 导出当前数据到 JSON 文件
   python scripts/migrate_storage.py --export backup.json
@@ -113,7 +113,7 @@ def main():
   python scripts/migrate_storage.py --import backup.json
 
 环境变量:
-  STORAGE_BACKEND  - 存储后端类型 (json, sqlite, postgres, git)
+  STORAGE_BACKEND  - 存储后端类型 (json, mysql, git)
   DATABASE_URL     - 数据库连接字符串
   GIT_REPO_URL     - Git 仓库地址
   GIT_TOKEN        - Git 访问令牌
@@ -123,13 +123,13 @@ def main():
     parser.add_argument(
         "--from",
         dest="from_backend",
-        choices=["json", "sqlite", "postgres", "git"],
+        choices=["json", "mysql", "git"],
         help="源存储后端",
     )
     parser.add_argument(
         "--to",
         dest="to_backend",
-        choices=["json", "sqlite", "postgres", "git"],
+        choices=["json", "mysql", "git"],
         help="目标存储后端",
     )
     parser.add_argument(

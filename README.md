@@ -34,8 +34,7 @@ docker compose up -d
 
 启动前请先在 `config.json` 中设置 `auth-key`，也可以在 `docker-compose.yml` 中通过 `CHATGPT2API_AUTH_KEY` 覆盖。
 
-- Web 面板：`http://localhost:3000`
-- API 地址：`http://localhost:3000/v1`
+- API 地址：`http://localhost:8000/v1`
 - 数据目录：`./data`
 
 ### 本地开发
@@ -45,9 +44,19 @@ docker compose up -d
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
 cd chatgpt2api
-uv sync
-uv run main.py
+mvn spring-boot:run
 ```
+
+ChatGPT Web 上游请求需要浏览器指纹传输。Docker 镜像默认安装并启用官方
+`curl-impersonate` 的 `curl_chrome110`；本地直接运行时可设置：
+
+```bash
+CHATGPT2API_CURL_BIN=/path/to/curl_chrome110 mvn spring-boot:run
+```
+
+官方 `curl-impersonate` 0.6.1 预构建 Chrome 镜像仅提供 `linux/amd64`。Docker 在
+`amd64` 上自动启用该传输；`arm64` 运行 Java 服务时，如需访问 ChatGPT Web
+上游，请通过 `CHATGPT2API_CURL_BIN` 提供对应架构的兼容浏览器指纹客户端。
 
 启动前端：
 
@@ -71,16 +80,15 @@ docker-compose up -d
 支持通过环境变量 `STORAGE_BACKEND` 切换存储方式：
 
 - `json` - 本地 JSON 文件（默认）
-- `sqlite` - 本地 SQLite 数据库
-- `postgres` - 外部 PostgreSQL（需配置 `DATABASE_URL`）
+- `mysql` - 外部 MySQL（需配置 `DATABASE_URL`）
 - `git` - Git 私有仓库（需配置 `GIT_REPO_URL` 和 `GIT_TOKEN`）
 
-示例：使用 PostgreSQL
+示例：使用 MySQL
 
 ```yaml
 environment:
-  - STORAGE_BACKEND=postgres
-  - DATABASE_URL=postgresql://user:password@host:5432/dbname
+  - STORAGE_BACKEND=mysql
+  - DATABASE_URL=jdbc:mysql://host:3306/dbname?user=user&password=password
 ```
 
 ## 功能

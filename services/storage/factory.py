@@ -14,8 +14,8 @@ def create_storage_backend(data_dir: Path) -> StorageBackend:
     根据环境变量创建存储后端
     
     环境变量：
-    - STORAGE_BACKEND: json|sqlite|postgres|git (默认 json)
-    - DATABASE_URL: 数据库连接字符串 (用于 sqlite/postgres)
+    - STORAGE_BACKEND: json|mysql|git (默认 json)
+    - DATABASE_URL: MySQL 数据库连接字符串 (用于 mysql)
     - GIT_REPO_URL: Git 仓库地址 (用于 git)
     - GIT_TOKEN: Git 访问令牌 (用于 git)
     - GIT_BRANCH: Git 分支 (默认 main)
@@ -32,16 +32,15 @@ def create_storage_backend(data_dir: Path) -> StorageBackend:
         print(f"[storage] Using JSON storage: {file_path}")
         return JSONStorageBackend(file_path, auth_keys_path)
     
-    elif backend_type in ("sqlite", "postgres", "postgresql", "mysql", "database"):
+    elif backend_type in ("mysql", "database"):
         # 数据库存储
         database_url = os.getenv("DATABASE_URL", "").strip()
         
         if not database_url:
-            # 如果没有指定 DATABASE_URL，使用本地 SQLite
-            database_url = f"sqlite:///{data_dir / 'accounts.db'}"
-            print(f"[storage] No DATABASE_URL provided, using local SQLite: {database_url}")
-        else:
-            print(f"[storage] Using database storage: {_mask_password(database_url)}")
+            raise ValueError("DATABASE_URL is required when using mysql storage backend")
+        if not (database_url.startswith("mysql://") or database_url.startswith("mysql+pymysql://")):
+            raise ValueError("Only MySQL DATABASE_URL is supported for database storage")
+        print(f"[storage] Using database storage: {_mask_password(database_url)}")
         
         return DatabaseStorageBackend(database_url)
     
@@ -74,7 +73,7 @@ def create_storage_backend(data_dir: Path) -> StorageBackend:
     else:
         raise ValueError(
             f"Unknown storage backend: {backend_type}. "
-            f"Supported backends: json, sqlite, postgres, git"
+            f"Supported backends: json, mysql, git"
         )
 
 
