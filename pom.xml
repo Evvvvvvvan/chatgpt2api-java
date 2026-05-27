@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>1.8</java.version>
+        <kotlin.version>1.9.21</kotlin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
@@ -44,8 +45,13 @@
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
-            <artifactId>bcprov-jdk15on</artifactId>
-            <version>1.70</version>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.84</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.zhkl0228</groupId>
+            <artifactId>impersonator-okhttp</artifactId>
+            <version>1.0.12</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

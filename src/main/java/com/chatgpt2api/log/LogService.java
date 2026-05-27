@@ -3,6 +3,8 @@ package com.chatgpt2api.log;
 import com.chatgpt2api.config.AppConfigService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -24,6 +26,7 @@ import java.util.UUID;
 
 @Service
 public class LogService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(LogService.class);
     private final ObjectMapper mapper;
     private final Path path;
 
@@ -39,6 +42,7 @@ public class LogService {
         item.put("type", type);
         item.put("summary", summary);
         item.put("detail", detail == null ? new LinkedHashMap<String, Object>() : detail);
+        LOGGER.info("[{}] {} {}", type, summary, item.get("detail"));
         try {
             Files.createDirectories(path.getParent());
             String line = mapper.writeValueAsString(item) + "\n";

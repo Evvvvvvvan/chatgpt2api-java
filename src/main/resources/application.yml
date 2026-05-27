@@ -14,5 +14,10 @@ spring:
   jackson:
     default-property-inclusion: always
 
+logging:
+  level:
+    okhttp3: WARN
+    org.bouncycastle: WARN
+
 chatgpt2api:
   root-dir: ${CHATGPT2API_ROOT_DIR:.}

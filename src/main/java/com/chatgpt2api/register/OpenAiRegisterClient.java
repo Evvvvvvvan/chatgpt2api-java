@@ -25,7 +25,7 @@ public class OpenAiRegisterClient {
     private static final String AUTH = "https://auth.openai.com";
     private static final String PLATFORM = "https://platform.openai.com";
     private static final String CLIENT_ID = "app_2SKx67EdpoN0G6j64rFvigXD";
-    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+    private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15";
     private static final Pattern CODE = Pattern.compile("[?&]code=([^&]+)");
     private final UpstreamHttpClient http;
     private final MailProviderService mail;

@@ -75,16 +75,6 @@ export function TopNav() {
           >
             chatgpt2api
           </Link>
-          <a
-            href="https://github.com/basketikun/chatgpt2api"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 py-1 text-sm text-stone-400 transition hover:text-stone-700 dark:text-stone-500 dark:hover:text-stone-200"
-            aria-label="GitHub repository"
-          >
-            <Github className="size-4" />
-            <span className="hidden md:inline">GitHub</span>
-          </a>
           <div className="ml-auto sm:hidden">
             <ThemeToggle />
           </div>

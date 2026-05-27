@@ -123,7 +123,7 @@ public class AccountsController {
                 tokens.add(token);
             }
         }
-        tokens = unique(tokens);
+        tokens = accountService.usableTokens(unique(tokens));
         if (tokens.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "tokens is required");
         }
@@ -170,8 +170,9 @@ public class AccountsController {
             @RequestBody(required = false) Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         authGuard.requireAdmin(authorization);
-        List<String> tokens = body == null ? new ArrayList<String>() : strings(body.get("access_tokens"));
-        if (tokens.isEmpty()) {
+        List<String> submitted = body == null ? new ArrayList<String>() : strings(body.get("access_tokens"));
+        List<String> tokens = accountService.usableTokens(submitted);
+        if (tokens.isEmpty() && submitted.isEmpty()) {
             tokens = accountService.listTokens();
         }
         if (tokens.isEmpty()) {

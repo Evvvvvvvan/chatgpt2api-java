@@ -11,7 +11,7 @@
     "info",
     "warning"
   ],
-  "proxy": "",
+  "proxy": "http://127.0.0.1:7890",
   "base_url": "",
   "sensitive_words": [],
   "global_system_prompt": "",

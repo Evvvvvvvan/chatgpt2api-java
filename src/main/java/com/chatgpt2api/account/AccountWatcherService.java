@@ -1,6 +1,8 @@
 package com.chatgpt2api.account;
 
 import com.chatgpt2api.config.AppConfigService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
@@ -12,6 +14,7 @@ import java.util.Set;
 
 @Service
 public class AccountWatcherService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(AccountWatcherService.class);
     private final AccountService accounts;
     private final AppConfigService config;
     private volatile boolean running;
@@ -47,15 +50,17 @@ public class AccountWatcherService {
                 refreshSet.addAll(limited);
                 refreshSet.addAll(expiring);
                 if (!refreshSet.isEmpty()) {
+                    LOGGER.info("[account-watcher] refreshing limited={} expiring={}", limited.size(), expiring.size());
                     accounts.refreshAccounts(new ArrayList<String>(refreshSet));
                 }
                 List<String> keepalive = accounts.listRefreshTokenKeepaliveTokens();
                 keepalive.removeAll(expiring);
                 if (!keepalive.isEmpty()) {
+                    LOGGER.info("[account-watcher] keepalive refreshTokens={}", keepalive.size());
                     accounts.keepaliveRefreshTokens(keepalive);
                 }
-            } catch (RuntimeException ignored) {
-                // 后台刷新失败不影响接口服务运行，下一周期继续重试。
+            } catch (RuntimeException exception) {
+                LOGGER.error("[account-watcher] cycle failed: {}", exception.getMessage(), exception);
             }
             waitForNextCycle();
         }

@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
 @Service
 public class ChatgptWebService {
     private static final String BASE_URL = "https://chatgpt.com";
-    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
+    private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15";
     private static final Pattern FILE_ID = Pattern.compile("file[-_](?!service\\b)[A-Za-z0-9_-]+");
     private static final Pattern SEDIMENT_ID = Pattern.compile("sediment://([A-Za-z0-9_-]+)");
     private final ObjectMapper mapper;

@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -91,6 +92,55 @@ class AccountServiceTest {
         assertEquals(1, service.listLimitedTokens().size());
         assertEquals(limited.get("access_token"), service.listExpiringAccessTokens().get(0));
         assertTrue(service.listRefreshTokenKeepaliveTokens().contains(keepalive.get("access_token")));
+    }
+
+    @Test
+    void migratesStoredSessionJsonToAccessTokenWithoutPersistingSessionSecrets() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        Path accountsPath = tempDir.resolve("session-accounts.json");
+        JsonStorageBackend storage = new JsonStorageBackend(mapper, accountsPath, tempDir.resolve("session-auth_keys.json"));
+        Map<String, Object> claims = new LinkedHashMap<String, Object>();
+        claims.put("exp", 0);
+        String token = jwt(mapper, claims);
+        Map<String, Object> user = new LinkedHashMap<String, Object>();
+        user.put("email", "session@example.com");
+        Map<String, Object> plan = new LinkedHashMap<String, Object>();
+        plan.put("planType", "plus");
+        Map<String, Object> session = new LinkedHashMap<String, Object>();
+        session.put("WARNING_BANNER", "secret warning");
+        session.put("accessToken", token);
+        session.put("sessionToken", "session-secret");
+        session.put("user", user);
+        session.put("account", plan);
+        Map<String, Object> stored = new LinkedHashMap<String, Object>();
+        stored.put("access_token", mapper.writeValueAsString(session));
+        List<Map<String, Object>> input = new ArrayList<Map<String, Object>>();
+        input.add(stored);
+        storage.saveAccounts(input);
+
+        AccountService service = new AccountService(storage, mapper);
+        Map<String, Object> account = service.listAccounts().get(0);
+        String saved = new String(Files.readAllBytes(accountsPath), StandardCharsets.UTF_8);
+
+        assertEquals(token, account.get("access_token"));
+        assertEquals("session@example.com", account.get("email"));
+        assertEquals("plus", account.get("type"));
+        assertTrue(!saved.contains("session-secret"));
+        assertTrue(!saved.contains("WARNING_BANNER"));
+    }
+
+    @Test
+    void ignoresJsonTextWithoutAccessToken() {
+        ObjectMapper mapper = new ObjectMapper();
+        AccountService service = new AccountService(
+                new JsonStorageBackend(mapper, tempDir.resolve("invalid-accounts.json"), tempDir.resolve("invalid-auth_keys.json")),
+                mapper
+        );
+
+        Map<String, Object> result = service.addAccounts(java.util.Collections.singletonList("{\"WARNING_BANNER\":\"missing token\"}"));
+
+        assertEquals(0, result.get("added"));
+        assertEquals(0, service.listAccounts().size());
     }
 
     private String jwt(ObjectMapper mapper, Map<String, Object> claims) throws Exception {

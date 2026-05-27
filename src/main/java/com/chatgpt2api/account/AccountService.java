@@ -6,6 +6,8 @@ import com.chatgpt2api.log.LogService;
 import com.chatgpt2api.storage.StorageBackend;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +32,7 @@ import java.util.concurrent.Future;
 
 @Service
 public class AccountService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(AccountService.class);
     private final StorageBackend storage;
     private final ObjectMapper mapper;
     private final UpstreamHttpClient upstream;
@@ -59,6 +62,10 @@ public class AccountService {
 
     public synchronized List<String> listTokens() {
         return new ArrayList<String>(accounts.keySet());
+    }
+
+    public synchronized List<String> usableTokens(List<String> source) {
+        return uniqueTokens(source);
     }
 
     public synchronized String getTextAccessToken(Set<String> excludedTokens) {
@@ -270,6 +277,9 @@ public class AccountService {
 
     public Map<String, Object> refreshAccounts(List<String> accessTokens) {
         List<String> targets = uniqueTokens(accessTokens);
+        LOGGER.info("[account-refresh] batch start count={} proxyConfigured={} nativeTransportConfigured={}",
+                targets.size(), config != null && !config.getProxySettings().isEmpty(),
+                !AppConfigService.clean(System.getenv("CHATGPT2API_CURL_BIN")).isEmpty());
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         List<Map<String, Object>> errors = new ArrayList<Map<String, Object>>();
         int refreshed = 0;
@@ -290,6 +300,8 @@ public class AccountService {
                     error.put("token", anonymizeToken(entry.getValue()));
                     error.put("error", cause.getMessage());
                     errors.add(error);
+                    LOGGER.error("[account-refresh] account failed token={} error={}",
+                            anonymizeToken(entry.getValue()), cause.getMessage());
                 }
             }
         } finally {
@@ -298,16 +310,20 @@ public class AccountService {
         result.put("refreshed", refreshed);
         result.put("errors", errors);
         result.put("items", listAccounts());
+        LOGGER.info("[account-refresh] batch finish refreshed={} failed={}", refreshed, errors.size());
         return result;
     }
 
     public Map<String, Object> fetchRemoteInfo(String accessToken, String event) {
         requireRemoteClient();
+        LOGGER.info("[account-refresh] account start event={} token={}", event, anonymizeToken(accessToken));
         String activeToken = refreshAccessToken(accessToken, false, event + ":preflight");
         Map<String, Object> remote;
         try {
             remote = remoteUserInfo(activeToken);
         } catch (InvalidAccessTokenException exception) {
+            LOGGER.warn("[account-refresh] token rejected; refreshing token={} error={}",
+                    anonymizeToken(activeToken), exception.getMessage());
             String refreshedToken = refreshAccessToken(activeToken, true, event + ":invalid_access_token");
             if (!refreshedToken.equals(activeToken)) {
                 try {
@@ -323,6 +339,9 @@ public class AccountService {
             }
         } catch (RuntimeException exception) {
             recordRefreshError(activeToken, exception.getMessage());
+            addAccountLog("账号刷新失败", map("source", event, "token", anonymizeToken(activeToken), "error", exception.getMessage()));
+            LOGGER.error("[account-refresh] upstream lookup failed token={} error={}",
+                    anonymizeToken(activeToken), exception.getMessage());
             throw exception;
         }
         Map<String, Object> me = mapValue(remote.get("me"));
@@ -356,7 +375,10 @@ public class AccountService {
         updates.put("invalid_count", 0);
         updates.put("last_refresh_error", null);
         updates.put("last_refresh_error_at", null);
-        return updateAccount(activeToken, updates);
+        Map<String, Object> result = updateAccount(activeToken, updates);
+        LOGGER.info("[account-refresh] account finish token={} plan={} quota={} quotaUnknown={}",
+                anonymizeToken(activeToken), planType, quota, quotaUnknown);
+        return result;
     }
 
     public String refreshAccessToken(String accessToken, boolean force, String event) {
@@ -494,12 +516,21 @@ public class AccountService {
 
     private Map<String, Map<String, Object>> loadAccounts() {
         Map<String, Map<String, Object>> result = new LinkedHashMap<String, Map<String, Object>>();
+        boolean migrated = false;
         for (Map<String, Object> item : storage.loadAccounts()) {
             Map<String, Object> normalized = normalize(item);
             String token = AppConfigService.clean(normalized.get("access_token"));
             if (!token.isEmpty()) {
+                if (!token.equals(AppConfigService.clean(item.get("access_token"))) || result.containsKey(token)) {
+                    migrated = true;
+                }
                 result.put(token, normalized);
+            } else {
+                migrated = true;
             }
+        }
+        if (migrated) {
+            storage.saveAccounts(copyItems(result.values()));
         }
         return result;
     }
@@ -509,7 +540,7 @@ public class AccountService {
     }
 
     private Map<String, Object> prepareAccountPayload(Map<String, Object> source) {
-        String token = first(source.get("access_token"), source.get("accessToken"));
+        String token = extractToken(first(source.get("access_token"), source.get("accessToken")));
         if (token.isEmpty()) {
             return null;
         }
@@ -524,8 +555,8 @@ public class AccountService {
     }
 
     private Map<String, Object> normalize(Map<String, Object> source) {
-        Map<String, Object> item = new LinkedHashMap<String, Object>(source);
-        item.put("access_token", first(item.get("access_token"), item.get("accessToken")));
+        Map<String, Object> item = sessionPayload(source);
+        item.put("access_token", extractToken(first(item.get("access_token"), item.get("accessToken"))));
         item.remove("accessToken");
         item.put("type", valueOr(item.get("type"), "free"));
         item.put("status", valueOr(item.get("status"), "正常"));
@@ -563,35 +594,37 @@ public class AccountService {
     private Map<String, Object> remoteUserInfo(String token) {
         UpstreamHttpClient.Session session = upstream.session();
         Map<String, String> base = upstreamBaseHeaders(token);
+        LOGGER.info("[account-refresh] upstream stage=me token={}", anonymizeToken(token));
         UpstreamHttpClient.Response meResponse = session.get("https://chatgpt.com/backend-api/me",
                 upstreamHeaders(base, "/backend-api/me"), 20);
+        LOGGER.info("[account-refresh] upstream stage=conversation_init token={} meStatus={}",
+                anonymizeToken(token), meResponse.getStatus());
         UpstreamHttpClient.Response initResponse = session.postJson("https://chatgpt.com/backend-api/conversation/init",
                 upstreamHeaders(base, "/backend-api/conversation/init"),
                 map("gizmo_id", null, "requested_default_model", null, "conversation_id", null, "timezone_offset_min", -480), 20);
+        LOGGER.info("[account-refresh] upstream stage=account_check token={} initStatus={}",
+                anonymizeToken(token), initResponse.getStatus());
         UpstreamHttpClient.Response accountResponse = session.get(
                 "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-480",
                 upstreamHeaders(base, "/backend-api/accounts/check/v4-2023-04-27"), 20);
         requireAccountResponse(meResponse, "/backend-api/me");
         requireAccountResponse(initResponse, "/backend-api/conversation/init");
         requireAccountResponse(accountResponse, "/backend-api/accounts/check");
+        LOGGER.info("[account-refresh] upstream complete token={} status=/{}/{}/{}",
+                anonymizeToken(token), meResponse.getStatus(), initResponse.getStatus(), accountResponse.getStatus());
         return map("me", meResponse.jsonObject(), "init", initResponse.jsonObject(), "account", accountResponse.jsonObject());
     }
 
     private Map<String, String> upstreamBaseHeaders(String token) {
         Map<String, String> headers = new LinkedHashMap<String, String>();
         headers.put("Authorization", "Bearer " + token);
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0");
+        headers.put("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15");
         headers.put("Origin", "https://chatgpt.com");
         headers.put("Referer", "https://chatgpt.com/");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7");
         headers.put("Cache-Control", "no-cache");
         headers.put("Pragma", "no-cache");
         headers.put("Priority", "u=1, i");
-        headers.put("Sec-Ch-Ua", "\"Microsoft Edge\";v=\"143\", \"Chromium\";v=\"143\", \"Not A(Brand\";v=\"24\"");
-        headers.put("Sec-Ch-Ua-Arch", "\"x86\"");
-        headers.put("Sec-Ch-Ua-Bitness", "\"64\"");
-        headers.put("Sec-Ch-Ua-Mobile", "?0");
-        headers.put("Sec-Ch-Ua-Platform", "\"Windows\"");
         headers.put("Sec-Fetch-Dest", "empty");
         headers.put("Sec-Fetch-Mode", "cors");
         headers.put("Sec-Fetch-Site", "same-origin");
@@ -717,6 +750,9 @@ public class AccountService {
 
     private String anonymizeToken(String token) {
         String value = AppConfigService.clean(token);
+        if (value.startsWith("{") || value.startsWith("[")) {
+            return "[invalid-json-token]";
+        }
         return value.length() <= 12 ? value : value.substring(0, 6) + "..." + value.substring(value.length() - 6);
     }
 
@@ -724,13 +760,57 @@ public class AccountService {
         Set<String> seen = new LinkedHashSet<String>();
         if (source != null) {
             for (String token : source) {
-                String value = AppConfigService.clean(token);
+                String value = extractToken(token);
                 if (!value.isEmpty()) {
                     seen.add(value);
                 }
             }
         }
         return new ArrayList<String>(seen);
+    }
+
+    private Map<String, Object> sessionPayload(Map<String, Object> source) {
+        Map<String, Object> result = new LinkedHashMap<String, Object>(source);
+        String rawToken = first(source.get("access_token"), source.get("accessToken"));
+        Map<String, Object> session = parseJsonObject(rawToken);
+        String accessToken = first(session.get("access_token"), session.get("accessToken"));
+        if (accessToken.isEmpty()) {
+            return result;
+        }
+        Map<String, Object> user = mapValue(session.get("user"));
+        Map<String, Object> account = mapValue(session.get("account"));
+        result.put("access_token", accessToken);
+        putIfEmpty(result, "email", user.get("email"));
+        putIfEmpty(result, "user_id", user.get("id"));
+        putIfEmpty(result, "account_id", account.get("id"));
+        putIfEmpty(result, "type", first(account.get("plan_type"), account.get("planType")));
+        return result;
+    }
+
+    private String extractToken(String value) {
+        String token = AppConfigService.clean(value);
+        if (!token.startsWith("{")) {
+            return token;
+        }
+        Map<String, Object> payload = parseJsonObject(token);
+        return first(payload.get("access_token"), payload.get("accessToken"));
+    }
+
+    private Map<String, Object> parseJsonObject(String value) {
+        if (!AppConfigService.clean(value).startsWith("{")) {
+            return new LinkedHashMap<String, Object>();
+        }
+        try {
+            return mapper.readValue(value, new TypeReference<LinkedHashMap<String, Object>>() { });
+        } catch (Exception exception) {
+            return new LinkedHashMap<String, Object>();
+        }
+    }
+
+    private void putIfEmpty(Map<String, Object> target, String key, Object value) {
+        if (AppConfigService.clean(target.get(key)).isEmpty() && !AppConfigService.clean(value).isEmpty()) {
+            target.put(key, value);
+        }
     }
 
     private Map<String, Object> map(Object... entries) {

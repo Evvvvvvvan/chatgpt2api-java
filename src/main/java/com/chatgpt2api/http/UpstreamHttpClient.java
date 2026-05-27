@@ -3,30 +3,39 @@ package com.chatgpt2api.http;
 import com.chatgpt2api.config.AppConfigService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.zhkl0228.impersonator.ImpersonatorFactory;
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.OkHttpClientFactory;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.CookieManager;
-import java.net.CookiePolicy;
-import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URI;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class UpstreamHttpClient {
+    private static final Logger LOGGER = LoggerFactory.getLogger(UpstreamHttpClient.class);
     private final AppConfigService config;
     private final ObjectMapper mapper;
 
@@ -44,12 +53,55 @@ public class UpstreamHttpClient {
     }
 
     public final class Session {
-        private final CookieManager cookies = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
+        private final List<Cookie> browserCookies = new ArrayList<Cookie>();
+        private final CookieJar cookieJar = new CookieJar() {
+            @Override
+            public synchronized void saveFromResponse(HttpUrl url, List<Cookie> responseCookies) {
+                long now = System.currentTimeMillis();
+                for (Cookie next : responseCookies) {
+                    for (Iterator<Cookie> iterator = browserCookies.iterator(); iterator.hasNext();) {
+                        Cookie existing = iterator.next();
+                        if (existing.name().equals(next.name())
+                                && existing.domain().equals(next.domain())
+                                && existing.path().equals(next.path())) {
+                            iterator.remove();
+                        }
+                    }
+                    if (next.expiresAt() > now) {
+                        browserCookies.add(next);
+                    }
+                }
+            }
+
+            @Override
+            public synchronized List<Cookie> loadForRequest(HttpUrl url) {
+                long now = System.currentTimeMillis();
+                List<Cookie> result = new ArrayList<Cookie>();
+                for (Iterator<Cookie> iterator = browserCookies.iterator(); iterator.hasNext();) {
+                    Cookie cookie = iterator.next();
+                    if (cookie.expiresAt() <= now) {
+                        iterator.remove();
+                    } else if (cookie.matches(url)) {
+                        result.add(cookie);
+                    }
+                }
+                return result;
+            }
+        };
         private final Path nativeCookieFile = temporary("chatgpt2api-cookies-", ".txt");
         private final String proxy;
+        private final OkHttpClient browserClient;
 
         private Session(String proxy) {
             this.proxy = proxy;
+            this.browserClient = OkHttpClientFactory.create(ImpersonatorFactory.macSafari())
+                    .newHttpClient()
+                    .newBuilder()
+                    .cookieJar(cookieJar)
+                    .proxy(createProxy(proxy))
+                    .followRedirects(true)
+                    .followSslRedirects(true)
+                    .build();
         }
 
         public Response get(String url, Map<String, String> headers, int timeoutSeconds) {
@@ -78,47 +130,52 @@ public class UpstreamHttpClient {
 
         private Response execute(String method, String url, Map<String, String> headers, byte[] body, int timeoutSeconds) {
             String nativeBinary = AppConfigService.clean(System.getenv("CHATGPT2API_CURL_BIN"));
+            long started = System.nanoTime();
             if (!nativeBinary.isEmpty() && Files.isRegularFile(java.nio.file.Paths.get(nativeBinary))) {
-                return executeNative(nativeBinary, method, url, headers, body, timeoutSeconds);
+                LOGGER.info("[upstream] start transport=native method={} url={} proxyConfigured={} timeoutSeconds={}",
+                        method, safeUrl(url), !proxy.isEmpty(), timeoutSeconds);
+                try {
+                    Response response = executeNative(nativeBinary, method, url, headers, body, timeoutSeconds);
+                    LOGGER.info("[upstream] finish transport=native method={} url={} status={} elapsedMs={}",
+                            method, safeUrl(url), response.getStatus(), elapsed(started));
+                    return response;
+                } catch (RuntimeException exception) {
+                    LOGGER.error("[upstream] failed transport=native method={} url={} elapsedMs={} error={}",
+                            method, safeUrl(url), elapsed(started), exception.getMessage(), exception);
+                    throw exception;
+                }
             }
-            HttpURLConnection connection = null;
+            LOGGER.info("[upstream] start transport=impersonator method={} url={} proxyConfigured={} timeoutSeconds={}",
+                    method, safeUrl(url), !proxy.isEmpty(), timeoutSeconds);
             try {
-                URI uri = URI.create(url);
-                connection = (HttpURLConnection) new URL(url).openConnection(createProxy(proxy));
-                connection.setRequestMethod(method);
-                connection.setConnectTimeout(timeoutSeconds * 1000);
-                connection.setReadTimeout(timeoutSeconds * 1000);
-                connection.setInstanceFollowRedirects(true);
-                connection.setUseCaches(false);
+                OkHttpClient client = browserClient.newBuilder()
+                        .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                        .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                        .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                        .build();
+                Request.Builder request = new Request.Builder().url(url);
                 for (Map.Entry<String, String> header : headers.entrySet()) {
                     if (header.getValue() != null && !header.getValue().isEmpty()) {
-                        connection.setRequestProperty(header.getKey(), header.getValue());
+                        request.header(header.getKey(), header.getValue());
                     }
                 }
-                Map<String, List<String>> cookieHeaders = cookies.get(uri, Collections.<String, List<String>>emptyMap());
-                for (Map.Entry<String, List<String>> header : cookieHeaders.entrySet()) {
-                    for (String value : header.getValue()) {
-                        connection.addRequestProperty(header.getKey(), value);
-                    }
-                }
+                RequestBody requestBody = null;
                 if (body != null) {
-                    connection.setDoOutput(true);
-                    connection.setFixedLengthStreamingMode(body.length);
-                    OutputStream output = connection.getOutputStream();
-                    output.write(body);
-                    output.close();
+                    requestBody = RequestBody.create(MediaType.parse(headers.get("Content-Type")), body);
                 }
-                int status = connection.getResponseCode();
-                cookies.put(uri, connection.getHeaderFields());
-                InputStream source = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-                byte[] bytes = source == null ? new byte[0] : readBytes(source);
-                return new Response(status, connection.getHeaderFields(), bytes, connection.getURL().toString());
+                request.method(method, requestBody);
+                try (okhttp3.Response upstreamResponse = client.newCall(request.build()).execute()) {
+                    byte[] bytes = upstreamResponse.body() == null ? new byte[0] : upstreamResponse.body().bytes();
+                    Response response = new Response(upstreamResponse.code(), upstreamResponse.headers().toMultimap(), bytes,
+                            upstreamResponse.request().url().toString());
+                    LOGGER.info("[upstream] finish transport=impersonator method={} url={} status={} elapsedMs={}",
+                            method, safeUrl(url), response.getStatus(), elapsed(started));
+                    return response;
+                }
             } catch (IOException exception) {
+                LOGGER.error("[upstream] failed transport=impersonator method={} url={} elapsedMs={} error={}",
+                        method, safeUrl(url), elapsed(started), exception.getMessage(), exception);
                 throw new IllegalStateException("upstream request failed: " + method + " " + url + ": " + exception.getMessage(), exception);
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
             }
         }
 
@@ -300,5 +357,18 @@ public class UpstreamHttpClient {
 
     private String abbreviate(String value) {
         return value.length() <= 500 ? value : value.substring(0, 500) + "...[truncated]";
+    }
+
+    private long elapsed(long started) {
+        return (System.nanoTime() - started) / 1000000L;
+    }
+
+    private String safeUrl(String value) {
+        try {
+            URI uri = URI.create(value);
+            return uri.getScheme() + "://" + uri.getAuthority() + uri.getPath();
+        } catch (RuntimeException exception) {
+            return "[invalid-url]";
+        }
     }
 }
